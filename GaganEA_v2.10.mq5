@@ -274,7 +274,7 @@ void OnTick()
    // Compare the last CLOSED M1 bar's close price against the AMA value
    // at that same bar. This avoids repainting: bar[1] is fully formed.
    {
-      double ama_dir_buf[2];
+      double ama_dir_buf[];
       ArraySetAsSeries(ama_dir_buf, true);
       if(CopyBuffer(ama_handle, 0, 0, 2, ama_dir_buf) >= 2)
       {
@@ -1519,7 +1519,7 @@ void UpdateDashboard()
    ObjSetText(lbl+"v_trend", trend_str, trend_col);
 
    // ── AMA Value (last closed M1 bar) ──────────────────────────────
-   double ama_disp_buf[2];
+   double ama_disp_buf[];
    ArraySetAsSeries(ama_disp_buf, true);
    double ama_val_display = 0;
    if(CopyBuffer(ama_handle, 0, 0, 2, ama_disp_buf) >= 2)
@@ -1556,14 +1556,11 @@ void UpdateDashboard()
    }
    else
    {
-      double bid_now  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-      double ama_disp_buf2[2];
-      ArraySetAsSeries(ama_disp_buf2, true);
-      double ama_v2 = 0;
-      if(CopyBuffer(ama_handle, 0, 0, 2, ama_disp_buf2) >= 2) ama_v2 = ama_disp_buf2[1];
-      double dist_pips = (ama_v2 > 0) ? MathAbs(bid_now - ama_v2) / pip : 0;
+      // ama_val_display already computed above — reuse it, no second CopyBuffer needed
+      double bid_now2   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double dist_pips2 = (ama_val_display > 0) ? MathAbs(bid_now2 - ama_val_display) / pip : 0;
       ObjSetText(lbl+"v_dist",
-                 StringFormat("%.1f pips %s", dist_pips, ama_bullish ? "above" : "below"),
+                 StringFormat("%.1f pips %s", dist_pips2, ama_bullish ? "above" : "below"),
                  ama_bullish ? clrLime : clrTomato);
    }
 
@@ -1571,6 +1568,7 @@ void UpdateDashboard()
    ObjSetText(lbl+"v_sig", current_signal, signal_color);
 
    // ── Live spread ──────────────────────────────────────────────────
+   double bid_now     = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double live_spread = (SymbolInfoDouble(_Symbol, SYMBOL_ASK) - bid_now) / pip;
    color  sprd_col    = (Max_Spread_Pips > 0 && live_spread > Max_Spread_Pips) ? clrTomato : clrLime;
    ObjSetText(lbl+"v_sprd",
