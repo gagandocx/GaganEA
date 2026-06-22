@@ -49,17 +49,18 @@ input double          Risk_Percent        = 6.0;           // Auto Risk % per Tr
 input double          Max_LotSize         = 10.0;          // Maximum Lot Size
 
 input group "=== STOP LOSS & TARGETS ==="
+// XAUUSD M1: pip = $0.01  |  SL=$20  T1=$5  T2=$8  T3=$15
 input bool            Use_StopLoss        = true;          // Use Stop Loss? (ON/OFF)
-input int             StopLoss_Pips       = 2500;          // Stop Loss (Pips)
-input int             T1_Pips             = 800;           // Target 1 (Pips)
-input int             T2_Pips             = 1200;          // Target 2 (Pips)
-input int             T3_Pips             = 2000;          // Target 3 (Pips)
+input int             StopLoss_Pips       = 2000;          // Stop Loss in Pips  (XAUUSD: 2000=$20)
+input int             T1_Pips             = 500;           // Target 1 in Pips   (XAUUSD: 500=$5)
+input int             T2_Pips             = 800;           // Target 2 in Pips   (XAUUSD: 800=$8)
+input int             T3_Pips             = 1500;          // Target 3 in Pips   (XAUUSD: 1500=$15)
 input double          T1_ClosePercent     = 65.0;          // T1 Close % of Position
 input double          T2_ClosePercent     = 80.0;          // T2 Close % of Position
 input double          T3_ClosePercent     = 100.0;         // T3 Close % (Full Close)
 
 input group "=== TRAILING STOP (Individual) ==="
-input int             Trail_Step_Pips     = 30;            // Trail Step After T2 (Pips)
+input int             Trail_Step_Pips     = 150;           // Trail Step After T2 (XAUUSD: 150=$1.50)
 
 input group "=== AMA TREND-FLIP EXIT & DIRECTION (M1) ==="
 input bool             Use_AMA_Exit        = true;          // Use AMA 3-Candle Exit (ON/OFF)
@@ -81,13 +82,15 @@ input double           AMA_Pullback_Sigma  = 0.5;            // Zone width in st
 // Threshold auto-widens in volatile markets and tightens in calm markets
 
 input group "=== AVERAGING BASKET TRAILING (Same-Side) ==="
+// XAUUSD M1: basket starts trailing after $3 combined profit, trails by $1.50
 input bool            Use_Basket_Trailing = true;          // Use Basket Trailing (ON/OFF)
-input double          Basket_Lock_Pips    = 30.0;          // Profit Lock to Start Trailing (Combined Pips)
-input double          Basket_Trail_Step   = 15.0;          // Basket Trail Step (Combined Pips)
+input double          Basket_Lock_Pips    = 300.0;         // Profit Lock to Start Trailing (XAUUSD: 300=$3.00)
+input double          Basket_Trail_Step   = 150.0;         // Basket Trail Step              (XAUUSD: 150=$1.50)
 
 input group "=== MULTI-TRADE SETTINGS ==="
-input int             Min_Trade_Distance  = 20;            // Min Distance Between Trades (Pips)
-input int             Max_Trade_Distance  = 40;            // Max Distance Between Trades (Pips)
+// XAUUSD M1: min $3 between entries, max $10 — prevents clustering and chasing
+input int             Min_Trade_Distance  = 300;           // Min Distance Between Trades (XAUUSD: 300=$3.00)
+input int             Max_Trade_Distance  = 1000;          // Max Distance Between Trades (XAUUSD: 1000=$10.00)
 
 input group "=== EQUITY PROTECTION (Global Close) ==="
 input bool            Use_EP_Percent      = true;          // Equity Protection % (ON/OFF)
@@ -101,8 +104,8 @@ input bool            Use_Master_EP                = true;                   // 
 input double          Master_Trigger_DD_Percent    = 1.5;                    // Trigger Drawdown %
 input int             Master_Trigger_Min_Trades    = 3;                      // OR Trigger Min Trades Open
 input ENUM_MASTER_MODE Master_Logic_Mode           = MODE_ALL_SIMULTANEOUS;  // Sub-trade Logic Mode
-input double          Master_Lock_Pips             = 30.0;                   // Fast Profit Lock (Combined Pips)
-input double          Master_Trail_Step            = 15.0;                   // Trail Step (Combined Pips)
+input double          Master_Lock_Pips             = 300.0;                  // Fast Profit Lock (XAUUSD: 300=$3.00)
+input double          Master_Trail_Step            = 150.0;                  // Trail Step       (XAUUSD: 150=$1.50)
 
 input group "=== HIGH IMPACT NEWS FILTER ==="
 input bool            News_Filter_Enable  = false;         // Enable High Impact News Filter
@@ -147,7 +150,7 @@ input int             Dashboard_X        = 15;             // Dashboard X Positi
 input int             Dashboard_Y        = 30;             // Dashboard Y Position
 input int             Magic_Number       = 202400;         // EA Magic Number
 input int             Max_Slippage       = 10;             // Max Slippage (Points)
-input int             Max_Spread_Pips    = 50;             // Max Spread to Allow Entry (Pips, 0=off)
+input int             Max_Spread_Pips    = 30;             // Max Spread to Allow Entry (Fusion XAUUSD: 30=$0.30)
 input string          EA_Comment         = "GaganEA";      // Trade Comment
 
 
