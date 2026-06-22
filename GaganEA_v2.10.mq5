@@ -126,17 +126,17 @@ input bool            Use_DarkCloud      = true;           // Bearish: Dark Clou
 input bool            Use_BearHarami     = true;           // Bearish: Harami
 input bool            Use_HangingMan     = true;           // Bearish: Hanging Man
 
-input group "=== CHART PATTERNS ==="
-input bool            Use_DoubleTop      = true;           // Chart: Double Top (Bearish)
-input bool            Use_DoubleBottom   = true;           // Chart: Double Bottom (Bullish)
-input bool            Use_HeadShoulders  = true;           // Chart: Head & Shoulders (Bearish)
-input bool            Use_InvHeadShould  = true;           // Chart: Inv Head & Shoulders (Bullish)
-input bool            Use_BearFlag       = true;           // Chart: Bear Flag
-input bool            Use_BullFlag       = true;           // Chart: Bull Flag
-input bool            Use_RisingWedge    = true;           // Chart: Rising Wedge (Bearish)
-input bool            Use_FallingWedge   = true;           // Chart: Falling Wedge (Bullish)
-input bool            Use_BearTriangle   = true;           // Chart: Descending Triangle (Bearish)
-input bool            Use_BullTriangle   = true;           // Chart: Ascending Triangle (Bullish)
+input group "=== CHART PATTERNS (disabled on M1 — noise on short timeframes) ==="
+input bool            Use_DoubleTop      = false;          // Chart: Double Top (Bearish)
+input bool            Use_DoubleBottom   = false;          // Chart: Double Bottom (Bullish)
+input bool            Use_HeadShoulders  = false;          // Chart: Head & Shoulders (Bearish)
+input bool            Use_InvHeadShould  = false;          // Chart: Inv Head & Shoulders (Bullish)
+input bool            Use_BearFlag       = false;          // Chart: Bear Flag
+input bool            Use_BullFlag       = false;          // Chart: Bull Flag
+input bool            Use_RisingWedge    = false;          // Chart: Rising Wedge (Bearish)
+input bool            Use_FallingWedge   = false;          // Chart: Falling Wedge (Bullish)
+input bool            Use_BearTriangle   = false;          // Chart: Descending Triangle (Bearish)
+input bool            Use_BullTriangle   = false;          // Chart: Ascending Triangle (Bullish)
 
 input group "=== NEWS FILTER ==="
 input bool            News_FilterEnable  = false;          // Enable News Filter (No Trading)
