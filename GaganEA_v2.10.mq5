@@ -60,7 +60,10 @@ input double          T2_ClosePercent     = 80.0;          // T2 Close % of Posi
 input double          T3_ClosePercent     = 100.0;         // T3 Close % (Full Close)
 
 input group "=== TRAILING STOP (Individual) ==="
-input int             Trail_Step_Pips     = 150;           // Trail Step After T2 (XAUUSD: 150=$1.50)
+// XAUUSD M1: Trail starts immediately at $2 profit — SL can NEVER go to loss after that
+input int             Trail_Start_Pips    = 200;           // Start trailing when profit >= X pips (XAUUSD: 200=$2.00)
+input int             Trail_Step_Pips     = 100;           // Trail distance behind price         (XAUUSD: 100=$1.00)
+input int             BE_Buffer_Pips      = 150;           // BE lock buffer after T1 hit         (XAUUSD: 150=$1.50)
 
 input group "=== AMA TREND-FLIP EXIT & DIRECTION (M1) ==="
 input bool             Use_AMA_Exit        = true;          // Use AMA 3-Candle Exit (ON/OFF)
@@ -650,63 +653,97 @@ void ManageTargets()
 //+------------------------------------------------------------------+
 //| Individual trailing stop (activates after T2 hit)                 |
 //+------------------------------------------------------------------+
+//| Individual trailing stop — 3-stage profit-securing system         |
+//|                                                                    |
+//| Stage 0 (profit >= Trail_Start_Pips):                             |
+//|   SL trails Trail_Step behind price. Floor = entry (BE).          |
+//|   → Trade CANNOT go to loss once Stage 0 activates.               |
+//|                                                                    |
+//| Stage 1 (T1 hit):                                                  |
+//|   Floor raised to entry + BE_Buffer. Small profit is now locked.  |
+//|                                                                    |
+//| Stage 2 (T2 hit):                                                  |
+//|   Floor raised to entry + T1_Pips. T1 profit is now locked.       |
+//|   Trailing continues tightly from here.                            |
+//+------------------------------------------------------------------+
 void ManageIndividualTrailing()
 {
-   double bid        = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask        = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double trail_dist = Trail_Step_Pips * pip;
-   double be_buffer  = 15 * pip;
-   double t1_lock    = T1_Pips * pip;
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
    for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
       if(!posInfo.SelectByIndex(i)) continue;
       if(posInfo.Symbol() != _Symbol || posInfo.Magic() != Magic_Number) continue;
 
-      ulong  ticket   = posInfo.Ticket();
-      double open_px  = posInfo.PriceOpen();
-      double cur_sl   = posInfo.StopLoss();
-      bool   is_buy   = (posInfo.PositionType() == POSITION_TYPE_BUY);
-      bool   hit_t1   = TicketInArray(t1_hit_tickets, ticket);
-      bool   hit_t2   = TicketInArray(t2_hit_tickets, ticket);
+      ulong  ticket      = posInfo.Ticket();
+      double open_px     = posInfo.PriceOpen();
+      double cur_sl      = posInfo.StopLoss();
+      bool   is_buy      = (posInfo.PositionType() == POSITION_TYPE_BUY);
+      bool   hit_t1      = TicketInArray(t1_hit_tickets, ticket);
+      bool   hit_t2      = TicketInArray(t2_hit_tickets, ticket);
+      double cur_price   = is_buy ? bid : ask;
+      double profit_pips = is_buy ? (cur_price - open_px) / pip
+                                  : (open_px - cur_price) / pip;
 
-      // STAGE 1: T1 hit → move SL to break-even + buffer
-      if(hit_t1 && !hit_t2)
+      // ── SL Floor: rises as trade matures, never goes back down ────
+      // Ensures trade cannot go from profit back to loss at each stage
+      double floor_sl;
+      if(hit_t2)
       {
-         if(is_buy)
-         {
-            double be_sl = NormalizeDouble(open_px + be_buffer, _Digits);
-            if(cur_sl < be_sl - pip)
-               trade.PositionModify(ticket, be_sl, posInfo.TakeProfit());
-         }
-         else
-         {
-            double be_sl = NormalizeDouble(open_px - be_buffer, _Digits);
-            if(cur_sl < point_size || cur_sl > be_sl + pip)
-               trade.PositionModify(ticket, be_sl, posInfo.TakeProfit());
-         }
-         continue;
+         // T2 hit → floor locked at T1 profit level (maximum security)
+         floor_sl = is_buy ? NormalizeDouble(open_px + T1_Pips * pip,       _Digits)
+                           : NormalizeDouble(open_px - T1_Pips * pip,       _Digits);
       }
-
-      // STAGE 2: T2 hit → trail with SL floor at T1 level
-      if(!hit_t2) continue;
-
-      if(is_buy)
+      else if(hit_t1)
       {
-         double trail_sl  = NormalizeDouble(bid - trail_dist, _Digits);
-         double floor_sl  = NormalizeDouble(open_px + t1_lock, _Digits);
-         double target_sl = MathMax(trail_sl, floor_sl);
-         if(target_sl > cur_sl + pip)
-            trade.PositionModify(ticket, target_sl, posInfo.TakeProfit());
+         // T1 hit → floor locked at entry + BE buffer (small profit guaranteed)
+         floor_sl = is_buy ? NormalizeDouble(open_px + BE_Buffer_Pips * pip, _Digits)
+                           : NormalizeDouble(open_px - BE_Buffer_Pips * pip, _Digits);
       }
       else
       {
-         double trail_sl  = NormalizeDouble(ask + trail_dist, _Digits);
-         double floor_sl  = NormalizeDouble(open_px - t1_lock, _Digits);
-         double target_sl = MathMin(trail_sl, floor_sl);
-         if(cur_sl < point_size || target_sl < cur_sl - pip)
-            trade.PositionModify(ticket, target_sl, posInfo.TakeProfit());
+         // Nothing hit yet → floor at entry (breakeven, no loss allowed once trailing starts)
+         floor_sl = NormalizeDouble(open_px, _Digits);
       }
+
+      // ── Active trailing: fires as soon as profit >= Trail_Start OR T2 hit ──
+      bool trail_active = (profit_pips >= Trail_Start_Pips || hit_t2);
+
+      double trail_dist = Trail_Step_Pips * pip;
+
+      if(trail_active)
+      {
+         if(is_buy)
+         {
+            double trail_sl  = NormalizeDouble(bid - trail_dist, _Digits);
+            double target_sl = MathMax(trail_sl, floor_sl); // never trail below floor
+            if(target_sl > cur_sl + pip)
+               trade.PositionModify(ticket, target_sl, posInfo.TakeProfit());
+         }
+         else
+         {
+            double trail_sl  = NormalizeDouble(ask + trail_dist, _Digits);
+            double target_sl = MathMin(trail_sl, floor_sl); // never trail above floor
+            if(cur_sl < point_size || target_sl < cur_sl - pip)
+               trade.PositionModify(ticket, target_sl, posInfo.TakeProfit());
+         }
+      }
+      else if(hit_t1)
+      {
+         // T1 hit but Trail_Start not yet reached → one-time SL lift to BE+buffer
+         if(is_buy)
+         {
+            if(cur_sl < floor_sl - pip)
+               trade.PositionModify(ticket, floor_sl, posInfo.TakeProfit());
+         }
+         else
+         {
+            if(cur_sl < point_size || cur_sl > floor_sl + pip)
+               trade.PositionModify(ticket, floor_sl, posInfo.TakeProfit());
+         }
+      }
+      // else: profit < Trail_Start and T1 not hit → original SL untouched
    }
 }
 
