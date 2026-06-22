@@ -69,6 +69,12 @@ input int              AMA_Slow_EMA        = 30;             // AMA Slow EMA Con
 input int              AMA_Shift           = 0;              // AMA Shift
 input int              AMA_Confirm_Candles = 3;              // Consecutive M1 Closes to Confirm Flip
 
+input group "=== AMA PULLBACK ENTRY FILTER ==="
+input bool             Use_AMA_Pullback    = true;           // Only enter when price near AMA (ON/OFF)
+input int              AMA_Pullback_Bars   = 20;             // Bars to build average AMA distance
+input double           AMA_Pullback_MaxPct = 40.0;          // Enter only when current dist <= X% of avg dist
+// Example: avg=100 pips, MaxPct=40 → only enter when price is within 40 pips of AMA
+
 input group "=== AVERAGING BASKET TRAILING (Same-Side) ==="
 input bool            Use_Basket_Trailing = true;          // Use Basket Trailing (ON/OFF)
 input double          Basket_Lock_Pips    = 30.0;          // Profit Lock to Start Trailing (Combined Pips)
@@ -153,6 +159,11 @@ double   ama_buf[];
 // AMA-based trade direction (replaces HTF/CTF EMA trend logic)
 bool     ama_bullish;   // last closed M1 bar closed ABOVE AMA  → only BUYs allowed
 bool     ama_bearish;   // last closed M1 bar closed BELOW AMA  → only SELLs allowed
+
+// AMA Pullback filter — updated every new bar
+double   avg_ama_dist_pips = 0.0;  // rolling average distance between close and AMA over N bars
+double   cur_ama_dist_pips = 0.0;  // current bar's distance from AMA (pips)
+bool     pullback_ok       = true; // true = price is near AMA → entry allowed
 
 // State tracking per position ticket for T1/T2 hit flags
 ulong    t1_hit_tickets[];
@@ -305,6 +316,45 @@ void OnTick()
       bool buy_trend_ok  = ama_bullish;
       bool sell_trend_ok = ama_bearish;
 
+      // ── AMA PULLBACK FILTER ──────────────────────────────────────
+      // Average the close-to-AMA distance over AMA_Pullback_Bars bars.
+      // Only allow entries when the current bar's distance is within
+      // AMA_Pullback_MaxPct% of that average.
+      // This stops the EA from entering when price is already extended
+      // far from the AMA — it waits for a pullback instead.
+      pullback_ok = true;
+      if(Use_AMA_Pullback)
+      {
+         int   pb_bars = MathMax(2, AMA_Pullback_Bars);
+         double hist_ama[];
+         ArraySetAsSeries(hist_ama, true);
+         if(CopyBuffer(ama_handle, 0, 1, pb_bars, hist_ama) >= pb_bars)
+         {
+            double sum_dist = 0;
+            int    cnt      = 0;
+            for(int i = 0; i < pb_bars; i++)
+            {
+               double close_i = iClose(_Symbol, PERIOD_M1, i + 1);
+               double ama_i   = hist_ama[i];
+               if(ama_i > 0 && ama_i != EMPTY_VALUE)
+               {
+                  sum_dist += MathAbs(close_i - ama_i) / pip;
+                  cnt++;
+               }
+            }
+            avg_ama_dist_pips = (cnt > 0) ? sum_dist / cnt : 0;
+
+            // Current bar distance
+            double last_close  = iClose(_Symbol, PERIOD_M1, 1);
+            double last_ama    = hist_ama[0];
+            cur_ama_dist_pips  = (last_ama > 0 && last_ama != EMPTY_VALUE)
+                                 ? MathAbs(last_close - last_ama) / pip : 0;
+
+            double threshold   = avg_ama_dist_pips * AMA_Pullback_MaxPct / 100.0;
+            pullback_ok = (avg_ama_dist_pips <= 0 || cur_ama_dist_pips <= threshold);
+         }
+      }
+
       // Pattern detection
       string bull_pattern_name = "";
       string bear_pattern_name = "";
@@ -312,15 +362,20 @@ void OnTick()
       bool bear_signal = DetectBearishPattern(bear_pattern_name);
 
       // Signal state for dashboard
-      if(buy_trend_ok && bull_signal)
+      if(buy_trend_ok && bull_signal && pullback_ok)
       {
          current_signal = "BUY READY";
          signal_color   = clrLime;
       }
-      else if(sell_trend_ok && bear_signal)
+      else if(sell_trend_ok && bear_signal && pullback_ok)
       {
          current_signal = "SELL READY";
          signal_color   = clrRed;
+      }
+      else if(!pullback_ok)
+      {
+         current_signal = "EXTENDED - WAIT";
+         signal_color   = clrOrange;
       }
       else if(buy_trend_ok || sell_trend_ok)
       {
@@ -333,12 +388,12 @@ void OnTick()
          signal_color   = clrGray;
       }
 
-      // Entry conditions
-      if(buy_trend_ok && bull_signal && DistanceCheckOK(ORDER_TYPE_BUY))
+      // Entry conditions — pullback_ok gates all entries
+      if(buy_trend_ok && bull_signal && pullback_ok && DistanceCheckOK(ORDER_TYPE_BUY))
       {
          OpenTrade(ORDER_TYPE_BUY, bull_pattern_name);
       }
-      else if(sell_trend_ok && bear_signal && DistanceCheckOK(ORDER_TYPE_SELL))
+      else if(sell_trend_ok && bear_signal && pullback_ok && DistanceCheckOK(ORDER_TYPE_SELL))
       {
          OpenTrade(ORDER_TYPE_SELL, bear_pattern_name);
       }
@@ -1359,7 +1414,7 @@ void CreateDashboard()
    ObjLabel(lbl+"v_trend", "---",           vx, r,        val_col, lfs);
    ObjLabel(lbl+"l_ctf",   "AMA Value",     x,  r+row,    lbl_col, lfs);
    ObjLabel(lbl+"v_ctf",   "---",           vx, r+row,    val_col, lfs);
-   ObjLabel(lbl+"l_dist",  "Price vs AMA",  x,  r+row*2,  lbl_col, lfs);
+   ObjLabel(lbl+"l_dist",  "Pullback",       x,  r+row*2,  lbl_col, lfs);
    ObjLabel(lbl+"v_dist",  "---",           vx, r+row*2,  val_col, lfs);
    ObjLabel(lbl+"l_sig",   "Signal",        x,  r+row*3,  lbl_col, lfs);
    ObjLabel(lbl+"v_sig",   "---",           vx, r+row*3,  val_col, lfs);
@@ -1446,13 +1501,41 @@ void UpdateDashboard()
       ama_val_display = ama_disp_buf[1];
    ObjSetText(lbl+"v_ctf", DoubleToString(ama_val_display, _Digits), clrWhite);
 
-   // ── Price vs AMA distance ────────────────────────────────────────
-   double bid_now   = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double dist_pips = (ama_val_display > 0) ? MathAbs(bid_now - ama_val_display) / pip : 0;
-   string side_str  = ama_bullish ? "above" : "below";
-   ObjSetText(lbl+"v_dist",
-              StringFormat("%.1f pips %s", dist_pips, side_str),
-              ama_bullish ? clrLime : clrTomato);
+   // ── Pullback filter: show cur dist / avg dist and zone status ────
+   if(Use_AMA_Pullback)
+   {
+      double threshold = avg_ama_dist_pips * AMA_Pullback_MaxPct / 100.0;
+      string pb_str;
+      color  pb_col;
+      if(avg_ama_dist_pips <= 0)
+      {
+         pb_str = "Calculating...";
+         pb_col = clrGray;
+      }
+      else if(pullback_ok)
+      {
+         pb_str = StringFormat("%.1fp / %.1fp avg  IN ZONE", cur_ama_dist_pips, avg_ama_dist_pips);
+         pb_col = clrLime;
+      }
+      else
+      {
+         pb_str = StringFormat("%.1fp / %.1fp avg  TOO FAR", cur_ama_dist_pips, avg_ama_dist_pips);
+         pb_col = clrOrange;
+      }
+      ObjSetText(lbl+"v_dist", pb_str, pb_col);
+   }
+   else
+   {
+      double bid_now  = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+      double ama_disp_buf2[2];
+      ArraySetAsSeries(ama_disp_buf2, true);
+      double ama_v2 = 0;
+      if(CopyBuffer(ama_handle, 0, 0, 2, ama_disp_buf2) >= 2) ama_v2 = ama_disp_buf2[1];
+      double dist_pips = (ama_v2 > 0) ? MathAbs(bid_now - ama_v2) / pip : 0;
+      ObjSetText(lbl+"v_dist",
+                 StringFormat("%.1f pips %s", dist_pips, ama_bullish ? "above" : "below"),
+                 ama_bullish ? clrLime : clrTomato);
+   }
 
    // ── Signal ───────────────────────────────────────────────────────
    ObjSetText(lbl+"v_sig", current_signal, signal_color);
