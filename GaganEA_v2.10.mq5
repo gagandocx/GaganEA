@@ -69,11 +69,16 @@ input int              AMA_Slow_EMA        = 30;             // AMA Slow EMA Con
 input int              AMA_Shift           = 0;              // AMA Shift
 input int              AMA_Confirm_Candles = 3;              // Consecutive M1 Closes to Confirm Flip
 
-input group "=== AMA PULLBACK ENTRY FILTER ==="
+input group "=== AMA PULLBACK ENTRY FILTER (ADAPTIVE) ==="
 input bool             Use_AMA_Pullback    = true;           // Only enter when price near AMA (ON/OFF)
-input int              AMA_Pullback_Bars   = 20;             // Bars to build average AMA distance
-input double           AMA_Pullback_MaxPct = 40.0;          // Enter only when current dist <= X% of avg dist
-// Example: avg=100 pips, MaxPct=40 → only enter when price is within 40 pips of AMA
+input int              AMA_Pullback_Bars   = 50;             // Lookback bars to compute mean + std dev of AMA distance
+input double           AMA_Pullback_Sigma  = 0.5;            // Zone width in std deviations above mean
+// Threshold = Mean(dist) + Sigma × StdDev(dist)
+// Sigma= 0.0 → enter only when dist ≤ mean  (average pullback)
+// Sigma= 0.5 → enter when dist ≤ mean+½σ   (default, balanced)
+// Sigma= 1.0 → enter when dist ≤ mean+1σ   (wide zone, more trades)
+// Sigma=-0.5 → tighter than mean            (only very close pullbacks)
+// Threshold auto-widens in volatile markets and tightens in calm markets
 
 input group "=== AVERAGING BASKET TRAILING (Same-Side) ==="
 input bool            Use_Basket_Trailing = true;          // Use Basket Trailing (ON/OFF)
@@ -161,8 +166,10 @@ bool     ama_bullish;   // last closed M1 bar closed ABOVE AMA  → only BUYs al
 bool     ama_bearish;   // last closed M1 bar closed BELOW AMA  → only SELLs allowed
 
 // AMA Pullback filter — updated every new bar
-double   avg_ama_dist_pips = 0.0;  // rolling average distance between close and AMA over N bars
+double   avg_ama_dist_pips = 0.0;  // mean AMA distance (pips) over lookback
 double   cur_ama_dist_pips = 0.0;  // current bar's distance from AMA (pips)
+double   ama_dist_stddev   = 0.0;  // std deviation of AMA distances — measures market volatility
+double   ama_dist_thresh   = 0.0;  // adaptive threshold = mean + Sigma × stddev (auto-updates each bar)
 bool     pullback_ok       = true; // true = price is near AMA → entry allowed
 
 // State tracking per position ticket for T1/T2 hit flags
@@ -317,41 +324,59 @@ void OnTick()
       bool sell_trend_ok = ama_bearish;
 
       // ── AMA PULLBACK FILTER ──────────────────────────────────────
-      // Average the close-to-AMA distance over AMA_Pullback_Bars bars.
-      // Only allow entries when the current bar's distance is within
-      // AMA_Pullback_MaxPct% of that average.
-      // This stops the EA from entering when price is already extended
-      // far from the AMA — it waits for a pullback instead.
+      // ── AMA PULLBACK FILTER (ADAPTIVE) ──────────────────────────────
+      // 1. Collect the close-to-AMA distance for each of the last N bars
+      // 2. Compute mean and standard deviation of those distances
+      // 3. Threshold = Mean + (Sigma × StdDev)
+      //    → In a volatile trending market: StdDev is large → threshold widens
+      //      automatically → EA doesn't become overly restrictive
+      //    → In a calm ranging market: StdDev is small → threshold tightens
+      //      automatically → EA only enters on genuine tight pullbacks
       pullback_ok = true;
       if(Use_AMA_Pullback)
       {
-         int   pb_bars = MathMax(2, AMA_Pullback_Bars);
+         int    pb_bars = MathMax(3, AMA_Pullback_Bars);
          double hist_ama[];
          ArraySetAsSeries(hist_ama, true);
          if(CopyBuffer(ama_handle, 0, 1, pb_bars, hist_ama) >= pb_bars)
          {
+            // ── Pass 1: collect distances and compute mean ──────────
+            double dists[];
+            ArrayResize(dists, pb_bars);
             double sum_dist = 0;
             int    cnt      = 0;
             for(int i = 0; i < pb_bars; i++)
             {
-               double close_i = iClose(_Symbol, PERIOD_M1, i + 1);
-               double ama_i   = hist_ama[i];
-               if(ama_i > 0 && ama_i != EMPTY_VALUE)
-               {
-                  sum_dist += MathAbs(close_i - ama_i) / pip;
-                  cnt++;
-               }
+               double ama_i = hist_ama[i];
+               if(ama_i <= 0 || ama_i == EMPTY_VALUE) continue;
+               double close_i   = iClose(_Symbol, PERIOD_M1, i + 1);
+               dists[cnt]       = MathAbs(close_i - ama_i) / pip;
+               sum_dist        += dists[cnt];
+               cnt++;
             }
-            avg_ama_dist_pips = (cnt > 0) ? sum_dist / cnt : 0;
 
-            // Current bar distance
-            double last_close  = iClose(_Symbol, PERIOD_M1, 1);
-            double last_ama    = hist_ama[0];
-            cur_ama_dist_pips  = (last_ama > 0 && last_ama != EMPTY_VALUE)
-                                 ? MathAbs(last_close - last_ama) / pip : 0;
+            if(cnt >= 3)
+            {
+               avg_ama_dist_pips = sum_dist / cnt;
 
-            double threshold   = avg_ama_dist_pips * AMA_Pullback_MaxPct / 100.0;
-            pullback_ok = (avg_ama_dist_pips <= 0 || cur_ama_dist_pips <= threshold);
+               // ── Pass 2: std deviation ───────────────────────────
+               double sum_sq = 0;
+               for(int i = 0; i < cnt; i++)
+                  sum_sq += (dists[i] - avg_ama_dist_pips) * (dists[i] - avg_ama_dist_pips);
+               ama_dist_stddev = MathSqrt(sum_sq / cnt);
+
+               // ── Adaptive threshold ──────────────────────────────
+               ama_dist_thresh = avg_ama_dist_pips + AMA_Pullback_Sigma * ama_dist_stddev;
+               ama_dist_thresh = MathMax(ama_dist_thresh, 1.0); // floor: at least 1 pip
+
+               // ── Current bar distance ────────────────────────────
+               double last_ama   = hist_ama[0];
+               double last_close = iClose(_Symbol, PERIOD_M1, 1);
+               cur_ama_dist_pips = (last_ama > 0 && last_ama != EMPTY_VALUE)
+                                   ? MathAbs(last_close - last_ama) / pip : 0;
+
+               pullback_ok = (cur_ama_dist_pips <= ama_dist_thresh);
+            }
          }
       }
 
@@ -1501,10 +1526,9 @@ void UpdateDashboard()
       ama_val_display = ama_disp_buf[1];
    ObjSetText(lbl+"v_ctf", DoubleToString(ama_val_display, _Digits), clrWhite);
 
-   // ── Pullback filter: show cur dist / avg dist and zone status ────
+   // ── Pullback filter: adaptive display ───────────────────────────
    if(Use_AMA_Pullback)
    {
-      double threshold = avg_ama_dist_pips * AMA_Pullback_MaxPct / 100.0;
       string pb_str;
       color  pb_col;
       if(avg_ama_dist_pips <= 0)
@@ -1512,15 +1536,21 @@ void UpdateDashboard()
          pb_str = "Calculating...";
          pb_col = clrGray;
       }
-      else if(pullback_ok)
-      {
-         pb_str = StringFormat("%.1fp / %.1fp avg  IN ZONE", cur_ama_dist_pips, avg_ama_dist_pips);
-         pb_col = clrLime;
-      }
       else
       {
-         pb_str = StringFormat("%.1fp / %.1fp avg  TOO FAR", cur_ama_dist_pips, avg_ama_dist_pips);
-         pb_col = clrOrange;
+         // Volatility regime label based on coefficient of variation
+         double cv = (avg_ama_dist_pips > 0) ? ama_dist_stddev / avg_ama_dist_pips : 0;
+         string regime = (cv < 0.30) ? "CALM" : (cv < 0.60) ? "NORMAL" : "VOLATILE";
+         if(pullback_ok)
+         {
+            pb_str = StringFormat("%.1fp ≤ %.1fp [%s]", cur_ama_dist_pips, ama_dist_thresh, regime);
+            pb_col = clrLime;
+         }
+         else
+         {
+            pb_str = StringFormat("%.1fp > %.1fp [%s]", cur_ama_dist_pips, ama_dist_thresh, regime);
+            pb_col = clrOrange;
+         }
       }
       ObjSetText(lbl+"v_dist", pb_str, pb_col);
    }
