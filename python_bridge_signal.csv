@@ -1,0 +1,2 @@
+timestamp,symbol,action,confidence,sl_pips,tp_pips,lot_size,model_name,regime
+2026-06-24 23:21:17,XAUUSD,SELL,0.3181,54.0,9999.0,0.01,gradient_boost,trending
